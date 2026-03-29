@@ -7,7 +7,7 @@ Secure Launch Specification
 
 .. class:: center
 
-**Version:** 0.6.0-draft
+**Version:** 0.7.0-draft
 
 .. class:: center
 
@@ -18,6 +18,7 @@ Secure Launch Specification
  **Daniel P. Smith** (Apertus Solutions)
  **Ross Philipson** (Oracle)
  **Krystian Hebel** (3mdeb)
+ **Sergii Dmytruk** (3mdeb)
 
 .. sectnum::
 
@@ -99,6 +100,13 @@ Handler to be implemented by each platform supported by TrenchBoot. The
 specification provides a well-defined interface for DLE Handler and bootloader
 implementors to follow to ensure interoperability between implementations.
 
+Dynamic Lauch Measured Environment Header
+-----------------------------------------
+
+The DLME Header is a platform agnositic header structure that a Secure
+Launch-complaint kernel must implement. It is derived from Intel's MLE Header,
+but generalized to allow it to be compatible with other platforms.
+
 Secure Launch Resource Table
 ----------------------------
 
@@ -173,8 +181,55 @@ Sequence
 Secure Launch Interfaces
 ========================
 
-There are two interfaces to be defined here, the DLE Handler Specifications and
-the SLRT Specification.
+Secure Launch Interfaces consist of three interfaces, the DLME Header, the DLE
+Handler Specifications, and the SLRT Specification.
+
+DLME Header
+-----------
+
+Detailed below is the header structure that a Secure Launch-compatible kernel
+must provide and is discoverable. The information provides details to the DLE
+Handler to facilitate it in launching the kernel.
+
+
+DLME Header Structure
+~~~~~~~~~~~~~~~~~~~~~
+
+A descripton of the DLME for the DLE Handler.
+
+:uuid0: Chunk 0 of UUID, 9082AC5A
+:uuid1: Chunk 1 of UUID, 74A7476F
+:uuid2: Chunk 2 of UUID, A2555C0F
+:uuid3: Chunk 3 of UUID, 42B651CB
+:header_len: Length of the header.
+:version: Header version.
+:entry_point: Address of the DLME entry point.
+:first_valid_page: Address to first valid page of DLME.
+:start: Offset to first byte of DLME within page space.
+:end: Offset to last byte + 1 of DLME within page space.
+:capabilities: Bitfield of DLME supported capabilities.
+:cmdline_start: Starting address of command line buffer.
+:cmdline_end: Ending address of command line buffer.
+
+.. code-block:: c
+    :linenos: 1
+
+    struct slr_dlme_header {
+        u32 uuid0;
+        u32 uuid1;
+        u32 uuid2;
+        u32 uuid3;
+        u32 header_len;
+        u32 version;
+        u32 entry_point;
+        u32 first_valid_page;
+        u32 start;
+        u32 end;
+        u32 capabilities;
+        u32 cmdline_start;
+        u32 cmdline_end;
+    };
+
 
 DLE Handler Specification
 -------------------------
@@ -184,17 +239,54 @@ The DLE Handler Specification defines the invocation interface for the DLE Handl
 Platform Requirements
 ~~~~~~~~~~~~~~~~~~~~~
 
-| **1** - x86 Platforms
-| **1.1** - The DLE Handler **MAY** be invoked with the CPU in either 32bit
+| **1** - General Requirements
+| **1.1** - The DLME **SHALL** provide a DLME Header
+| **1.2** - The DLME **SHALL** provide a mechanism to discover the DLME Header
+|
+| **2** - x86 Non-EFI Platforms
+| **2.1** - The DLE Handler **MAY** be invoked with the CPU in either 32bit
 |       protected mode or 64bit long mode
-| **1.2** - The SLRT **SHALL** be passed to the DLE Handler in the EDI/RDI CPU
+| **2.2** - The SLRT **SHALL** be passed to the DLE Handler in the EDI/RDI CPU
 |       register
-| **1.3** - All other registers besides EDI/RDI are not guarenteed
-| **1.4** - The invoking code **SHALL** use a long jump to the DLE Handler
-| **1.5** - The DLE Handler **SHALL NOT** return control on error
+| **2.3** - All other registers besides EDI/RDI are not guarenteed
+| **2.4** - The invoking code **SHALL** use a long jump to the DLE Handler
+| **2.5** - The DLE Handler **SHALL NOT** return control on error
+|
+| **3** - x86 EFI Platforms
+| **3.1** - The DLE Handler **SHALL** implement the Secure Launch EFI Protocol.
 |
 | **2** - Arm Platforms
 | **2.1** - *Reserved*
+
+
+EFI SLaunch Protocol
+~~~~~~~~~~~~~~~~~~~~
+
+On EFI platforms the DLE Handler must implement the EFI_SLAUNCH_PROTOCOL that provides the following methods.
+
+* **EFI_SLAUNCH_REGISTER_DLME**: Registers the DLME with the DLE Handler
+* **EFI_SLAUNCH_LAUNCH**: Invokes the DLE Handler
+
+The interface definition for the protocol is as follows,
+
+.. code-block:: c
+    :linenos: 1
+
+    typedef struct tdEFI_SLAUNCH_PROTOCOL {
+      EFI_SLAUNCH_SLRT_UPDATE_REGISTER_DLME RegisterDlme;
+      EFI_SLAUNCH_LAUNCH Launch;
+    } EFI_SLAUNCH_PROTOCOL
+
+    typedef EFI_STATUS (EFIAPI *EFI_SLAUNCH_REGISTER_DLME) (
+                        IN EFI_SLAUNCH_PROTOCOL *This,
+                        IN EFI_PHYSICAL_ADDRESS *DlmeBase
+                        IN EFI_PHYSICAL_ADDRESS *DlmeHeader
+                        IN EFI_PHYSICAL_ADDRESS *DlmeConfigTable
+    );
+
+    typedef EFI_STATUS (EFIAPI *EFI_SLAUNCH_LAUNCH) (
+                        IN EFI_SLAUNCH_PROTOCOL *This
+    );
 
 
 SLRT Specification
@@ -213,7 +305,7 @@ able to meet. The supplemental sections will cover any idiosyncrasies for the
 various platforms and environments supported.
 
 Platform Requirements
----------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 | **1** - General Requirements
 | **1.1** - The SLRT **MUST** begin with the magic value `0x4452544d`.
@@ -359,6 +451,8 @@ invoke the DLE Handler and for the DLE Handler to invoke the DL.
 :dlme_size: The size of the DLME.
 :dlme_base: The base address where the DLME is located.
 :dlme_entry: The offset into the DLME of the entry point.
+:dlme_header_offset: The offest into the DLME of the DLME Header.
+:dlme_config_table: The offsee into the DLME of the DLME Config Table.
 :bl_context: Allows the bootloader to provide a reference to a context object.
 :dl_handler: The address to the entry point for the DLE Handler.
 
@@ -372,6 +466,8 @@ invoke the DLE Handler and for the DLE Handler to invoke the DL.
         u64 dlme_size;
         u64 dlme_base;
         u64 dlme_entry;
+        u64 dlme_header_offset;
+        u64 dlme_config_table;
         struct slr_bl_context bl_context;
         u64 dl_handler;
     };
@@ -888,8 +984,7 @@ it in the TXT Heap definition. This area is referred to as the OS2MLE structure.
 The OS2MLE structure for Secure Launch is defined as follows,
 
 :version: Revision of the os2mle table
-:boot_params_addr:
-    Physical address of boot parameters, format depends on target kernel
+:reserved: Reserved field
 :slrt: Physical address of the SLRT
 :txt_info:
     Physical address of TXT info, located in SLRT (simply a convenience to avoid
@@ -906,12 +1001,11 @@ The OS2MLE structure for Secure Launch is defined as follows,
     struct os2mle {
         u32 version;
         u32 reserved;
-        u64 boot_params_addr;
         u64 slrt;
-        u64 txt_info;
+        u64 txt_info; 
         u32 ap_wake_block;
         u32 ap_wake_block_size;
-        u8  mle_scratch[64];
+        u8 mle_scratch[64];
     };
 
 [1] https://www.kernel.org/doc/html/v6.12/arch/x86/boot.html#details-of-header-fields
